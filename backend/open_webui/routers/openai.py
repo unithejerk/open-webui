@@ -299,6 +299,35 @@ def _inject_openclaw_body(
     payload['user'] = str(user.id)
 
 
+def _adapt_openclaw_input_images(payload: dict, api_config: dict) -> None:
+    """
+    Rewrite input_image items from OpenAI flat format to OpenClaw source-wrapper
+    format, for OpenClaw connections only.
+
+    OpenAI format:  {'type': 'input_image', 'image_url': 'https://...'}
+    OpenClaw format: {'type': 'input_image', 'source': {'type': 'url', 'url': 'https://...'}}
+
+    Also handles base64 data URLs by converting them to source.type='base64'.
+    Mutates payload['input'] in-place.
+    """
+    if not _is_openclaw_provider(api_config):
+        return
+    input_items = payload.get('input')
+    if not isinstance(input_items, list):
+        return
+    for item in input_items:
+        if item.get('type') != 'input_image':
+            continue
+        image_url = item.pop('image_url', None)
+        if image_url is None:
+            continue
+        if isinstance(image_url, str) and image_url.startswith('data:'):
+            # base64 data URL
+            item['source'] = {'type': 'base64', 'data': image_url}
+        else:
+            item['source'] = {'type': 'url', 'url': image_url}
+
+
 ##########################################
 #
 # API routes
@@ -1526,8 +1555,9 @@ async def generate_chat_completion(
                     part.get('text', '') for part in message['content'] if part.get('type') in ('input_text', 'text')
                 )
 
-    # OpenClaw: inject provider-specific body fields
+    # OpenClaw: inject provider-specific body fields and adapt input_image format
     _inject_openclaw_body(payload, api_config, user)
+    _adapt_openclaw_input_images(payload, api_config)
 
     payload = json.dumps(payload)
 
@@ -1823,6 +1853,7 @@ async def responses(
 
         # OpenClaw: inject provider-specific body fields before serialization
         _inject_openclaw_body(payload, api_config, user)
+        _adapt_openclaw_input_images(payload, api_config)
         body = json.dumps(payload)
 
         session = await get_session()

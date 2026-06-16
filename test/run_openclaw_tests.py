@@ -130,5 +130,64 @@ p = {}
 _inject_openclaw_body(p, oc, user)
 check('user is string', isinstance(p['user'], str))
 
+# --- _adapt_openclaw_input_images ---
+def _adapt_openclaw_input_images(payload, api_config):
+    if api_config.get('agents_provider') != 'openclaw':
+        return
+    input_items = payload.get('input')
+    if not isinstance(input_items, list):
+        return
+    for item in input_items:
+        if item.get('type') != 'input_image':
+            continue
+        image_url = item.pop('image_url', None)
+        if image_url is None:
+            continue
+        if isinstance(image_url, str) and image_url.startswith('data:'):
+            item['source'] = {'type': 'base64', 'data': image_url}
+        else:
+            item['source'] = {'type': 'url', 'url': image_url}
+
+print('\n=== _adapt_openclaw_input_images ===')
+
+# Convert URL image
+p = {'input': [{'type': 'input_image', 'image_url': 'https://example.com/cat.jpg'}]}
+_adapt_openclaw_input_images(p, oc)
+check('converts image_url to source wrapper',
+      p['input'][0] == {'type': 'input_image', 'source': {'type': 'url', 'url': 'https://example.com/cat.jpg'}})
+check('image_url key removed', 'image_url' not in p['input'][0])
+
+# Convert base64 data URL
+p = {'input': [{'type': 'input_image', 'image_url': 'data:image/jpeg;base64,/9j/4AAQ'}]}
+_adapt_openclaw_input_images(p, oc)
+check('converts data URL to base64 source',
+      p['input'][0]['source'] == {'type': 'base64', 'data': 'data:image/jpeg;base64,/9j/4AAQ'})
+
+# Noop for non-openclaw
+p = {'input': [{'type': 'input_image', 'image_url': 'https://example.com/cat.jpg'}]}
+_adapt_openclaw_input_images(p, hermes)
+check('noop for hermes', p['input'][0] == {'type': 'input_image', 'image_url': 'https://example.com/cat.jpg'})
+
+# Non-image items untouched
+p = {'input': [{'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': 'hi'}]}]}
+_adapt_openclaw_input_images(p, oc)
+check('non-image items untouched', p['input'][0]['type'] == 'message')
+
+# No input key
+p = {'model': 'gpt-4'}
+_adapt_openclaw_input_images(p, oc)
+check('no input key - no error', 'input' not in p)
+
+# Input is not a list
+p = {'input': 'not a list'}
+_adapt_openclaw_input_images(p, oc)
+check('non-list input - no error', p['input'] == 'not a list')
+
+# No image_url key on image item
+p = {'input': [{'type': 'input_image', 'source': {'type': 'url', 'url': 'https://x.com'}}]}
+_adapt_openclaw_input_images(p, oc)
+check('already in source format - preserved',
+      p['input'][0]['source'] == {'type': 'url', 'url': 'https://x.com'})
+
 print(f'\n=== RESULTS: {passed} passed, {failed} failed ===')
 sys.exit(0 if failed == 0 else 1)
