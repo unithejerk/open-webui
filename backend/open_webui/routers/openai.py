@@ -39,6 +39,14 @@ from open_webui.models.models import Models
 from open_webui.models.users import UserModel
 from open_webui.utils.access_control import check_model_access, has_connection_access
 from open_webui.utils.anthropic import get_anthropic_models, is_anthropic_url
+from open_webui.utils.openclaw import (
+    adapt_openclaw_input_images,
+    inject_openclaw_body,
+    inject_openclaw_headers,
+    is_openclaw_provider,
+    trim_openclaw_chat_messages,
+    trim_openclaw_responses_input,
+)
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.headers import get_custom_headers, include_user_info_headers
 from open_webui.utils.misc import (
@@ -227,105 +235,6 @@ def get_microsoft_entra_id_access_token():
         log.error(f'Error getting Microsoft Entra ID access token: {e}')
         return None
 
-
-##########################################
-#
-# OpenClaw provider helpers
-#
-##########################################
-
-
-def _is_openclaw_provider(api_config: dict) -> bool:
-    """Return True if this connection targets an OpenClaw agent backend."""
-    return api_config.get('agents_provider') == 'openclaw'
-
-
-def _derive_openclaw_session_key(
-    metadata: dict | None,
-    user: UserModel,
-) -> str:
-    """
-    Derive a stable session key for the x-openclaw-session-key header.
-
-    Format: openwebui:<user_id>:<chat_id>
-
-    When chat_id is unavailable in metadata, falls back to:
-        openwebui:<user_id>:default
-    """
-    user_id = user.id if user else 'anonymous'
-    chat_id = (metadata or {}).get('chat_id', 'default')
-    return f'openwebui:{user_id}:{chat_id}'
-
-
-def _inject_openclaw_headers(
-    headers: dict,
-    api_config: dict,
-    metadata: dict | None,
-    user: UserModel,
-) -> None:
-    """Mutate *headers* in-place to add x-openclaw-session-key if applicable."""
-    if not _is_openclaw_provider(api_config):
-        return
-    if not user:
-        return
-    headers['x-openclaw-session-key'] = _derive_openclaw_session_key(metadata, user)
-
-
-def _inject_openclaw_body(
-    payload: dict,
-    api_config: dict,
-    user: UserModel,
-) -> None:
-    """
-    Mutate *payload* in-place to add the user field for OpenClaw connections.
-
-    Collision rules:
-    - If payload['user'] is already a string, preserve it (caller intent wins).
-    - If payload['user'] is a dict/object (e.g. from pipeline plumbing), leave
-      it alone -- OpenClaw expects a string, but pipeline objects serve a
-      different purpose and we don't stomp them.
-    - Otherwise, set payload['user'] = str(user.id).
-    """
-    if not _is_openclaw_provider(api_config):
-        return
-    if not user:
-        return
-    if 'user' in payload:
-        existing = payload['user']
-        if isinstance(existing, str):
-            return  # caller-supplied string user -- preserve it
-        # dict/object or other type -- leave untouched (pipeline plumbing)
-        return
-    payload['user'] = str(user.id)
-
-
-def _adapt_openclaw_input_images(payload: dict, api_config: dict) -> None:
-    """
-    Rewrite input_image items from OpenAI flat format to OpenClaw source-wrapper
-    format, for OpenClaw connections only.
-
-    OpenAI format:  {'type': 'input_image', 'image_url': 'https://...'}
-    OpenClaw format: {'type': 'input_image', 'source': {'type': 'url', 'url': 'https://...'}}
-
-    Also handles base64 data URLs by converting them to source.type='base64'.
-    Mutates payload['input'] in-place.
-    """
-    if not _is_openclaw_provider(api_config):
-        return
-    input_items = payload.get('input')
-    if not isinstance(input_items, list):
-        return
-    for item in input_items:
-        if item.get('type') != 'input_image':
-            continue
-        image_url = item.pop('image_url', None)
-        if image_url is None:
-            continue
-        if isinstance(image_url, str) and image_url.startswith('data:'):
-            # base64 data URL
-            item['source'] = {'type': 'base64', 'data': image_url}
-        else:
-            item['source'] = {'type': 'url', 'url': image_url}
 
 
 ##########################################
@@ -1510,7 +1419,7 @@ async def generate_chat_completion(
     headers, cookies = await get_headers_and_cookies(request, url, key, api_config, metadata, user=user)
 
     # OpenClaw: inject provider-specific session key header
-    _inject_openclaw_headers(headers, api_config, metadata, user)
+    inject_openclaw_headers(headers, api_config, metadata, user)
 
     is_responses = api_config.get('api_type') == 'responses'
 
@@ -1555,9 +1464,26 @@ async def generate_chat_completion(
                     part.get('text', '') for part in message['content'] if part.get('type') in ('input_text', 'text')
                 )
 
-    # OpenClaw: inject provider-specific body fields and adapt input_image format
-    _inject_openclaw_body(payload, api_config, user)
-    _adapt_openclaw_input_images(payload, api_config)
+    # OpenClaw: only send the system prompt + messages since the last user
+    # turn.  OpenClaw stores the full conversation server-side via the
+    # x-openclaw-session-key header, so re-sending the entire history on
+    # every request wastes tokens and defeats the purpose of the session.
+    if is_agents_model:
+        if is_responses:
+            before = len(payload.get('input', []))
+            trim_openclaw_responses_input(payload, api_config)
+            after = len(payload.get('input', []))
+            if before != after:
+                log.debug('OpenClaw trim (responses): %d → %d items', before, after)
+        else:
+            before = len(payload.get('messages', []))
+            trim_openclaw_chat_messages(payload, api_config)
+            after = len(payload.get('messages', []))
+            if before != after:
+                log.debug('OpenClaw trim: %d → %d messages', before, after)
+
+    inject_openclaw_body(payload, api_config, user)
+    adapt_openclaw_input_images(payload, api_config)
 
     payload = json.dumps(payload)
 
@@ -1832,7 +1758,7 @@ async def responses(
         headers, cookies = await get_headers_and_cookies(request, url, key, api_config, metadata, user=user)
 
         # OpenClaw: inject provider-specific session key header
-        _inject_openclaw_headers(headers, api_config, metadata, user)
+        inject_openclaw_headers(headers, api_config, metadata, user)
 
         if api_config.get('azure') or api_config.get('provider') == 'azure':
             auth_type = api_config.get('auth_type', 'bearer')
@@ -1851,9 +1777,17 @@ async def responses(
         else:
             request_url = f'{url}/responses'
 
-        # OpenClaw: inject provider-specific body fields before serialization
-        _inject_openclaw_body(payload, api_config, user)
-        _adapt_openclaw_input_images(payload, api_config)
+        # OpenClaw: only send system instructions + messages since the last
+        # user turn (OpenClaw stores the full conversation via session key).
+        if is_agents_model:
+            before = len(payload.get('input', []))
+            trim_openclaw_responses_input(payload, api_config)
+            after = len(payload.get('input', []))
+            if before != after:
+                log.debug('OpenClaw trim (responses): %d → %d items', before, after)
+
+        inject_openclaw_body(payload, api_config, user)
+        adapt_openclaw_input_images(payload, api_config)
         body = json.dumps(payload)
 
         session = await get_session()

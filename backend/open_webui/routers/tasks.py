@@ -25,6 +25,7 @@ from open_webui.utils.task import (
     follow_up_generation_template,
     get_task_model_id,
     image_prompt_generation_template,
+    is_agents_model,
     moa_response_generation_template,
     query_generation_template,
     tags_generation_template,
@@ -188,6 +189,13 @@ async def generate_title(request: Request, form_data: dict, user=Depends(get_ver
 
     log.debug(f'generating chat title using model {task_model_id} for user {user.email} ')
 
+    agents_models = getattr(request.app.state, 'AGENTS_MODELS', {})
+    task_chat_id = (
+        f'{form_data.get("chat_id", "unknown")}:task:{TASKS.TITLE_GENERATION}'
+        if is_agents_model(task_model_id, agents_models)
+        else form_data.get('chat_id')
+    )
+
     if request.app.state.config.TITLE_GENERATION_PROMPT_TEMPLATE != '':
         template = request.app.state.config.TITLE_GENERATION_PROMPT_TEMPLATE
     else:
@@ -212,7 +220,7 @@ async def generate_title(request: Request, form_data: dict, user=Depends(get_ver
             **(request.state.metadata if hasattr(request.state, 'metadata') else {}),
             'task': str(TASKS.TITLE_GENERATION),
             'task_body': form_data,
-            'chat_id': form_data.get('chat_id', None),
+            'chat_id': task_chat_id,
         },
     }
 
@@ -266,6 +274,13 @@ async def generate_follow_ups(request: Request, form_data: dict, user=Depends(ge
 
     log.debug(f'generating chat title using model {task_model_id} for user {user.email} ')
 
+    agents_models = getattr(request.app.state, 'AGENTS_MODELS', {})
+    task_chat_id = (
+        f'{form_data.get("chat_id", "unknown")}:task:{TASKS.FOLLOW_UP_GENERATION}'
+        if is_agents_model(task_model_id, agents_models)
+        else form_data.get('chat_id')
+    )
+
     if request.app.state.config.FOLLOW_UP_GENERATION_PROMPT_TEMPLATE != '':
         template = request.app.state.config.FOLLOW_UP_GENERATION_PROMPT_TEMPLATE
     else:
@@ -281,7 +296,7 @@ async def generate_follow_ups(request: Request, form_data: dict, user=Depends(ge
             **(request.state.metadata if hasattr(request.state, 'metadata') else {}),
             'task': str(TASKS.FOLLOW_UP_GENERATION),
             'task_body': form_data,
-            'chat_id': form_data.get('chat_id', None),
+            'chat_id': task_chat_id,
         },
     }
 
@@ -335,6 +350,13 @@ async def generate_chat_tags(request: Request, form_data: dict, user=Depends(get
 
     log.debug(f'generating chat tags using model {task_model_id} for user {user.email} ')
 
+    agents_models = getattr(request.app.state, 'AGENTS_MODELS', {})
+    task_chat_id = (
+        f'{form_data.get("chat_id", "unknown")}:task:{TASKS.TAGS_GENERATION}'
+        if is_agents_model(task_model_id, agents_models)
+        else form_data.get('chat_id')
+    )
+
     if request.app.state.config.TAGS_GENERATION_PROMPT_TEMPLATE != '':
         template = request.app.state.config.TAGS_GENERATION_PROMPT_TEMPLATE
     else:
@@ -350,7 +372,7 @@ async def generate_chat_tags(request: Request, form_data: dict, user=Depends(get
             **(request.state.metadata if hasattr(request.state, 'metadata') else {}),
             'task': str(TASKS.TAGS_GENERATION),
             'task_body': form_data,
-            'chat_id': form_data.get('chat_id', None),
+            'chat_id': task_chat_id,
         },
     }
 
@@ -398,6 +420,13 @@ async def generate_image_prompt(request: Request, form_data: dict, user=Depends(
 
     log.debug(f'generating image prompt using model {task_model_id} for user {user.email} ')
 
+    agents_models = getattr(request.app.state, 'AGENTS_MODELS', {})
+    task_chat_id = (
+        f'{form_data.get("chat_id", "unknown")}:task:{TASKS.IMAGE_PROMPT_GENERATION}'
+        if is_agents_model(task_model_id, agents_models)
+        else form_data.get('chat_id')
+    )
+
     if request.app.state.config.IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE != '':
         template = request.app.state.config.IMAGE_PROMPT_GENERATION_PROMPT_TEMPLATE
     else:
@@ -413,7 +442,7 @@ async def generate_image_prompt(request: Request, form_data: dict, user=Depends(
             **(request.state.metadata if hasattr(request.state, 'metadata') else {}),
             'task': str(TASKS.IMAGE_PROMPT_GENERATION),
             'task_body': form_data,
-            'chat_id': form_data.get('chat_id', None),
+            'chat_id': task_chat_id,
         },
     }
 
@@ -479,6 +508,13 @@ async def generate_queries(request: Request, form_data: dict, user=Depends(get_v
 
     log.debug(f'generating {type} queries using model {task_model_id} for user {user.email}')
 
+    agents_models = getattr(request.app.state, 'AGENTS_MODELS', {})
+    task_chat_id = (
+        f'{form_data.get("chat_id", "unknown")}:task:{TASKS.QUERY_GENERATION}'
+        if is_agents_model(task_model_id, agents_models)
+        else form_data.get('chat_id')
+    )
+
     if (request.app.state.config.QUERY_GENERATION_PROMPT_TEMPLATE).strip() != '':
         template = request.app.state.config.QUERY_GENERATION_PROMPT_TEMPLATE
     else:
@@ -494,7 +530,7 @@ async def generate_queries(request: Request, form_data: dict, user=Depends(get_v
             **(request.state.metadata if hasattr(request.state, 'metadata') else {}),
             'task': str(TASKS.QUERY_GENERATION),
             'task_body': form_data,
-            'chat_id': form_data.get('chat_id', None),
+            'chat_id': task_chat_id,
         },
     }
 
@@ -558,6 +594,13 @@ async def generate_autocompletion(request: Request, form_data: dict, user=Depend
 
     log.debug(f'generating autocompletion using model {task_model_id} for user {user.email}')
 
+    agents_models = getattr(request.app.state, 'AGENTS_MODELS', {})
+    task_chat_id = (
+        f'{form_data.get("chat_id", "unknown")}:task:{TASKS.AUTOCOMPLETE_GENERATION}'
+        if is_agents_model(task_model_id, agents_models)
+        else form_data.get('chat_id')
+    )
+
     if (request.app.state.config.AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE).strip() != '':
         template = request.app.state.config.AUTOCOMPLETE_GENERATION_PROMPT_TEMPLATE
     else:
@@ -573,7 +616,7 @@ async def generate_autocompletion(request: Request, form_data: dict, user=Depend
             **(request.state.metadata if hasattr(request.state, 'metadata') else {}),
             'task': str(TASKS.AUTOCOMPLETE_GENERATION),
             'task_body': form_data,
-            'chat_id': form_data.get('chat_id', None),
+            'chat_id': task_chat_id,
         },
     }
 
@@ -621,6 +664,13 @@ async def generate_emoji(request: Request, form_data: dict, user=Depends(get_ver
 
     log.debug(f'generating emoji using model {task_model_id} for user {user.email} ')
 
+    agents_models = getattr(request.app.state, 'AGENTS_MODELS', {})
+    task_chat_id = (
+        f'{form_data.get("chat_id", "unknown")}:task:{TASKS.EMOJI_GENERATION}'
+        if is_agents_model(task_model_id, agents_models)
+        else form_data.get('chat_id')
+    )
+
     template = DEFAULT_EMOJI_GENERATION_PROMPT_TEMPLATE
 
     content = await emoji_generation_template(template, form_data['prompt'], user)
@@ -640,7 +690,7 @@ async def generate_emoji(request: Request, form_data: dict, user=Depends(get_ver
             **(request.state.metadata if hasattr(request.state, 'metadata') else {}),
             'task': str(TASKS.EMOJI_GENERATION),
             'task_body': form_data,
-            'chat_id': form_data.get('chat_id', None),
+            'chat_id': task_chat_id,
         },
     }
 
@@ -677,6 +727,13 @@ async def generate_moa_response(request: Request, form_data: dict, user=Depends(
             detail=ERROR_MESSAGES.MODEL_NOT_FOUND(),
         )
 
+    agents_models = getattr(request.app.state, 'AGENTS_MODELS', {})
+    task_chat_id = (
+        f'{form_data.get("chat_id", "unknown")}:task:{TASKS.MOA_RESPONSE_GENERATION}'
+        if is_agents_model(model_id, agents_models)
+        else form_data.get('chat_id')
+    )
+
     template = DEFAULT_MOA_GENERATION_PROMPT_TEMPLATE
 
     content = moa_response_generation_template(
@@ -691,7 +748,7 @@ async def generate_moa_response(request: Request, form_data: dict, user=Depends(
         'stream': form_data.get('stream', False),
         'metadata': {
             **(request.state.metadata if hasattr(request.state, 'metadata') else {}),
-            'chat_id': form_data.get('chat_id', None),
+            'chat_id': task_chat_id,
             'task': str(TASKS.MOA_RESPONSE_GENERATION),
             'task_body': form_data,
         },

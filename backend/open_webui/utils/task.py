@@ -27,6 +27,32 @@ def get_task_model_id(default_model_id: str, task_model: str, task_model_externa
     return task_model_id
 
 
+def strip_messages_for_agents(
+    model_id: str,
+    messages: list[dict],
+    agents_models: dict | None = None,
+) -> list[dict]:
+    """
+    Return messages suitable for a task template.
+
+    Agent backends (OpenClaw, etc.) store conversation state server-side.
+    Sending the full chat history in a task prompt to an agent is redundant
+    and wastes tokens — return an empty list so the template substitution
+    produces no history block.
+    """
+    if agents_models and model_id in agents_models:
+        return []
+    return messages
+
+
+def is_agents_model(
+    model_id: str,
+    agents_models: dict | None = None,
+) -> bool:
+    """Return True if *model_id* belongs to an agents API connection."""
+    return bool(agents_models and model_id in agents_models)
+
+
 def prompt_variables_template(template: str, variables: dict[str, str]) -> str:
     for variable, value in variables.items():
         template = template.replace(variable, value)

@@ -3948,12 +3948,22 @@ async def streaming_chat_response_handler(response, ctx):
                             delta_count = 0
                             last_delta_data = None
 
+                    # Track the last SSE event: line (some providers put the
+                    # event type on the event: line rather than in the data
+                    # JSON — merge it into the parsed data below).
+                    _pending_sse_event = None
+
                     async for line in response.body_iterator:
                         line = line.decode('utf-8', 'replace') if isinstance(line, bytes) else line
                         data = line
 
                         # Skip empty lines
                         if not data.strip():
+                            continue
+
+                        # Capture SSE event: line (standard SSE — OpenClaw et al.)
+                        if data.startswith('event:'):
+                            _pending_sse_event = data[len('event:'):].strip()
                             continue
 
                         # "data:" is the prefix for each event
@@ -3965,6 +3975,13 @@ async def streaming_chat_response_handler(response, ctx):
 
                         try:
                             data = json.loads(data)
+
+                            # If the provider used an event: line to convey
+                            # the event type, merge it into the parsed JSON
+                            # so downstream handlers can key on data['type'].
+                            if _pending_sse_event and 'type' not in data:
+                                data['type'] = _pending_sse_event
+                            _pending_sse_event = None
 
                             data, _ = await process_filter_functions(
                                 request=request,
