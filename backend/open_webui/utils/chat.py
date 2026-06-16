@@ -170,9 +170,12 @@ async def generate_chat_completion(
         if 'metadata' not in form_data:
             form_data['metadata'] = request.state.metadata
         else:
+            # Merge request metadata under form_data metadata so that
+            # caller-supplied keys (e.g. task-specific chat_id) take
+            # priority over the ambient request context.
             form_data['metadata'] = {
-                **form_data['metadata'],
                 **request.state.metadata,
+                **form_data['metadata'],
             }
 
     if getattr(request.state, 'direct', False) and hasattr(request.state, 'model'):
