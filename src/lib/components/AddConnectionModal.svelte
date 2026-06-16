@@ -28,6 +28,7 @@
 
 	export let ollama = false;
 	export let direct = false;
+	export let agents = false;
 
 	export let connection = null;
 
@@ -36,11 +37,13 @@
 	let auth_type = 'bearer';
 
 	let connectionType = 'external';
-	let provider = '';
+	let provider = ''; // cloud provider for OpenAI-style connections
+	let agentsProvider = 'openclaw'; // agent backend provider (openclaw, hermes, etc.)
 	$: azure =
 		provider === 'azure' ||
 		((url.includes('azure.') || url.includes('cognitive.microsoft.com')) &&
 			!direct &&
+			!agents &&
 			provider === '' &&
 			!/\/openai\/v1(\/|$)/.test(url));
 
@@ -121,6 +124,8 @@
 	const verifyHandler = () => {
 		if (ollama) {
 			verifyOllamaHandler();
+		} else if (agents) {
+			verifyOpenAIHandler();
 		} else {
 			verifyOpenAIHandler();
 		}
@@ -192,7 +197,8 @@
 				auth_type,
 				headers: headers ? JSON.parse(headers) : undefined,
 				...(provider ? { provider } : {}),
-				...(!ollama && azure ? { azure: true } : {}),
+				...(agents && agentsProvider ? { agents_provider: agentsProvider } : {}),
+				...(!ollama && !agents && azure ? { azure: true } : {}),
 				...(azure ? { api_version: apiVersion } : {}),
 				...(apiType ? { api_type: apiType } : {})
 			}
@@ -231,6 +237,7 @@
 			} else {
 				connectionType = connection.config?.connection_type ?? 'external';
 				provider = connection.config?.provider ?? (connection.config?.azure ? 'azure' : '');
+				agentsProvider = connection.config?.agents_provider ?? 'openclaw';
 				apiVersion = connection.config?.api_version ?? '';
 				apiType = connection.config?.api_type ?? '';
 			}
@@ -493,7 +500,27 @@
 							</div>
 						</div>
 
-						{#if !ollama && !direct}
+						{#if agents}
+							<div class="flex flex-row justify-between items-center w-full mt-2">
+								<label
+									for="agents-provider-select"
+									class={`mb-0.5 text-xs text-gray-500
+								${($settings?.highContrastMode ?? false) ? 'text-gray-800 dark:text-gray-100' : ''}`}
+									>{$i18n.t('Agent Backend')}</label
+								>
+
+								<div>
+									<select
+										id="agents-provider-select"
+										bind:value={agentsProvider}
+										class="text-xs text-gray-700 dark:text-gray-300 bg-transparent outline-hidden"
+									>
+										<option value="openclaw">OpenClaw</option>
+										<option value="hermes">Hermes</option>
+									</select>
+								</div>
+							</div>
+						{:else if !ollama && !direct}
 							<div class="flex flex-row justify-between items-center w-full mt-2">
 								<label
 									for="provider-select"

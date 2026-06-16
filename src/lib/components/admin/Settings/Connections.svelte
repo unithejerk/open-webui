@@ -6,6 +6,7 @@
 
 	import { getOllamaConfig, updateOllamaConfig } from '$lib/apis/ollama';
 	import { getOpenAIConfig, updateOpenAIConfig, getOpenAIModels } from '$lib/apis/openai';
+	import { getAgentsAPIConfig, updateAgentsAPIConfig } from '$lib/apis/agents';
 	import { getModels as _getModels, getBackendConfig } from '$lib/apis';
 	import { getConnectionsConfig, setConnectionsConfig } from '$lib/apis/configs';
 
@@ -19,6 +20,7 @@
 	import OpenAIConnection from './Connections/OpenAIConnection.svelte';
 	import AddConnectionModal from '$lib/components/AddConnectionModal.svelte';
 	import OllamaConnection from './Connections/OllamaConnection.svelte';
+	import AgentsAPIConnection from './Connections/AgentsAPIConnection.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -42,12 +44,18 @@
 
 	let ENABLE_OPENAI_API: null | boolean = null;
 	let ENABLE_OLLAMA_API: null | boolean = null;
+	let ENABLE_AGENTS_API: null | boolean = null;
+
+	let AGENTS_API_BASE_URLS = [''];
+	let AGENTS_API_KEYS = [''];
+	let AGENTS_API_CONFIGS = {};
 
 	let connectionsConfig = null;
 
 	let pipelineUrls = {};
 	let showAddOpenAIConnectionModal = false;
 	let showAddOllamaConnectionModal = false;
+	let showAddAgentsAPIConnectionModal = false;
 
 	const updateOpenAIHandler = async () => {
 		if (ENABLE_OPENAI_API !== null) {
@@ -136,10 +144,53 @@
 		await updateOllamaHandler();
 	};
 
+	const updateAgentsAPIHandler = async () => {
+		if (ENABLE_AGENTS_API !== null) {
+			// Remove trailing slashes
+			AGENTS_API_BASE_URLS = AGENTS_API_BASE_URLS.map((url) => url.replace(/\/$/, ''));
+
+			// Check if API KEYS length is same as API URLS length
+			if (AGENTS_API_KEYS.length !== AGENTS_API_BASE_URLS.length) {
+				if (AGENTS_API_KEYS.length > AGENTS_API_BASE_URLS.length) {
+					AGENTS_API_KEYS = AGENTS_API_KEYS.slice(0, AGENTS_API_BASE_URLS.length);
+				}
+				if (AGENTS_API_KEYS.length < AGENTS_API_BASE_URLS.length) {
+					const diff = AGENTS_API_BASE_URLS.length - AGENTS_API_KEYS.length;
+					for (let i = 0; i < diff; i++) {
+						AGENTS_API_KEYS.push('');
+					}
+				}
+			}
+
+			const res = await updateAgentsAPIConfig(localStorage.token, {
+				ENABLE_AGENTS_API: ENABLE_AGENTS_API,
+				AGENTS_API_BASE_URLS: AGENTS_API_BASE_URLS,
+				AGENTS_API_KEYS: AGENTS_API_KEYS,
+				AGENTS_API_CONFIGS: AGENTS_API_CONFIGS
+			}).catch((error) => {
+				toast.error(`${error}`);
+			});
+
+			if (res) {
+				toast.success($i18n.t('Agents API settings updated'));
+				await models.set(await getModels());
+			}
+		}
+	};
+
+	const addAgentsAPIConnectionHandler = async (connection) => {
+		AGENTS_API_BASE_URLS = [...AGENTS_API_BASE_URLS, connection.url];
+		AGENTS_API_KEYS = [...AGENTS_API_KEYS, connection.key];
+		AGENTS_API_CONFIGS[AGENTS_API_BASE_URLS.length - 1] = connection.config;
+
+		await updateAgentsAPIHandler();
+	};
+
 	onMount(async () => {
 		if ($user?.role === 'admin') {
 			let ollamaConfig = {};
 			let openaiConfig = {};
+			let agentsConfig = {};
 
 			await Promise.all([
 				(async () => {
@@ -150,11 +201,15 @@
 				})(),
 				(async () => {
 					connectionsConfig = await getConnectionsConfig(localStorage.token);
+				})(),
+				(async () => {
+					agentsConfig = await getAgentsAPIConfig(localStorage.token);
 				})()
 			]);
 
 			ENABLE_OPENAI_API = openaiConfig.ENABLE_OPENAI_API;
 			ENABLE_OLLAMA_API = ollamaConfig.ENABLE_OLLAMA_API;
+			ENABLE_AGENTS_API = agentsConfig.ENABLE_AGENTS_API;
 
 			OPENAI_API_BASE_URLS = openaiConfig.OPENAI_API_BASE_URLS;
 			OPENAI_API_KEYS = openaiConfig.OPENAI_API_KEYS;
@@ -162,6 +217,10 @@
 
 			OLLAMA_BASE_URLS = ollamaConfig.OLLAMA_BASE_URLS;
 			OLLAMA_API_CONFIGS = ollamaConfig.OLLAMA_API_CONFIGS;
+
+			AGENTS_API_BASE_URLS = agentsConfig.AGENTS_API_BASE_URLS;
+			AGENTS_API_KEYS = agentsConfig.AGENTS_API_KEYS;
+			AGENTS_API_CONFIGS = agentsConfig.AGENTS_API_CONFIGS;
 
 			if (ENABLE_OPENAI_API) {
 				// get url and idx
@@ -197,6 +256,7 @@
 	const submitHandler = async () => {
 		updateOpenAIHandler();
 		updateOllamaHandler();
+		updateAgentsAPIHandler();
 
 		dispatch('save');
 
@@ -215,9 +275,15 @@
 	onSubmit={addOllamaConnectionHandler}
 />
 
+<AddConnectionModal
+	agents
+	bind:show={showAddAgentsAPIConnectionModal}
+	onSubmit={addAgentsAPIConnectionHandler}
+/>
+
 <form class="flex flex-col h-full justify-between text-sm" on:submit|preventDefault={submitHandler}>
 	<div class=" overflow-y-scroll scrollbar-hidden h-full">
-		{#if ENABLE_OPENAI_API !== null && ENABLE_OLLAMA_API !== null && connectionsConfig !== null}
+		{#if ENABLE_OPENAI_API !== null && ENABLE_OLLAMA_API !== null && ENABLE_AGENTS_API !== null && connectionsConfig !== null}
 			<div class="mb-3.5">
 				<div class=" mt-0.5 mb-2.5 text-base font-medium">{$i18n.t('General')}</div>
 
@@ -356,6 +422,76 @@
 								>
 									{$i18n.t('Click here for help.')}
 								</a>
+							</div>
+						</div>
+					{/if}
+				</div>
+
+				<div class=" my-2">
+					<div class="flex justify-between items-center text-sm mb-2">
+						<div class="  font-medium">{$i18n.t('Agents API')}</div>
+
+						<div class="mt-1">
+							<Switch
+								bind:state={ENABLE_AGENTS_API}
+								on:change={async () => {
+									updateAgentsAPIHandler();
+								}}
+							/>
+						</div>
+					</div>
+
+					{#if ENABLE_AGENTS_API}
+						<div class="">
+							<div class="flex justify-between items-center">
+								<div class="font-medium text-xs">{$i18n.t('Manage Agents API Connections')}</div>
+
+								<Tooltip content={$i18n.t(`Add Connection`)}>
+									<button
+										class="px-1"
+										on:click={() => {
+											showAddAgentsAPIConnectionModal = true;
+										}}
+										type="button"
+									>
+										<Plus />
+									</button>
+								</Tooltip>
+							</div>
+
+							<div class="flex flex-col gap-1.5 mt-1.5">
+								{#each AGENTS_API_BASE_URLS as url, idx}
+									<AgentsAPIConnection
+										bind:url={AGENTS_API_BASE_URLS[idx]}
+										bind:key={AGENTS_API_KEYS[idx]}
+										bind:config={AGENTS_API_CONFIGS[idx]}
+										onSubmit={() => {
+											updateAgentsAPIHandler();
+										}}
+										onDelete={() => {
+											AGENTS_API_BASE_URLS = AGENTS_API_BASE_URLS.filter(
+												(url, urlIdx) => idx !== urlIdx
+											);
+											AGENTS_API_KEYS = AGENTS_API_KEYS.filter(
+												(key, keyIdx) => idx !== keyIdx
+											);
+
+											let newConfig = {};
+											AGENTS_API_BASE_URLS.forEach((url, newIdx) => {
+												newConfig[newIdx] =
+													AGENTS_API_CONFIGS[newIdx < idx ? newIdx : newIdx + 1];
+											});
+											AGENTS_API_CONFIGS = newConfig;
+											updateAgentsAPIHandler();
+										}}
+									/>
+								{/each}
+							</div>
+
+							<div class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+								{$i18n.t(
+									'Agent backends such as OpenClaw and Hermes provide agent-style API access. Add their OpenAI-compatible endpoints here.'
+								)}
 							</div>
 						</div>
 					{/if}
