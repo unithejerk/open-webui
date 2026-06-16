@@ -230,6 +230,77 @@ def get_microsoft_entra_id_access_token():
 
 ##########################################
 #
+# OpenClaw provider helpers
+#
+##########################################
+
+
+def _is_openclaw_provider(api_config: dict) -> bool:
+    """Return True if this connection targets an OpenClaw agent backend."""
+    return api_config.get('agents_provider') == 'openclaw'
+
+
+def _derive_openclaw_session_key(
+    metadata: dict | None,
+    user: UserModel,
+) -> str:
+    """
+    Derive a stable session key for the x-openclaw-session-key header.
+
+    Format: openwebui:<user_id>:<chat_id>
+
+    When chat_id is unavailable in metadata, falls back to:
+        openwebui:<user_id>:default
+    """
+    user_id = user.id if user else 'anonymous'
+    chat_id = (metadata or {}).get('chat_id', 'default')
+    return f'openwebui:{user_id}:{chat_id}'
+
+
+def _inject_openclaw_headers(
+    headers: dict,
+    api_config: dict,
+    metadata: dict | None,
+    user: UserModel,
+) -> None:
+    """Mutate *headers* in-place to add x-openclaw-session-key if applicable."""
+    if not _is_openclaw_provider(api_config):
+        return
+    if not user:
+        return
+    headers['x-openclaw-session-key'] = _derive_openclaw_session_key(metadata, user)
+
+
+def _inject_openclaw_body(
+    payload: dict,
+    api_config: dict,
+    user: UserModel,
+) -> None:
+    """
+    Mutate *payload* in-place to add the user field for OpenClaw connections.
+
+    Collision rules:
+    - If payload['user'] is already a string, preserve it (caller intent wins).
+    - If payload['user'] is a dict/object (e.g. from pipeline plumbing), leave
+      it alone -- OpenClaw expects a string, but pipeline objects serve a
+      different purpose and we don't stomp them.
+    - Otherwise, set payload['user'] = str(user.id).
+    """
+    if not _is_openclaw_provider(api_config):
+        return
+    if not user:
+        return
+    if 'user' in payload:
+        existing = payload['user']
+        if isinstance(existing, str):
+            return  # caller-supplied string user -- preserve it
+        # dict/object or other type -- leave untouched (pipeline plumbing)
+        return
+    payload['user'] = str(user.id)
+
+
+##########################################
+#
 # API routes
 #
 ##########################################
@@ -1409,6 +1480,9 @@ async def generate_chat_completion(
 
     headers, cookies = await get_headers_and_cookies(request, url, key, api_config, metadata, user=user)
 
+    # OpenClaw: inject provider-specific session key header
+    _inject_openclaw_headers(headers, api_config, metadata, user)
+
     is_responses = api_config.get('api_type') == 'responses'
 
     if api_config.get('azure') or api_config.get('provider') == 'azure':
@@ -1451,6 +1525,9 @@ async def generate_chat_completion(
                 message['content'] = ''.join(
                     part.get('text', '') for part in message['content'] if part.get('type') in ('input_text', 'text')
                 )
+
+    # OpenClaw: inject provider-specific body fields
+    _inject_openclaw_body(payload, api_config, user)
 
     payload = json.dumps(payload)
 
@@ -1677,6 +1754,7 @@ async def responses(
     Routes to the correct upstream backend based on the model field.
     """
     payload = form_data.model_dump(exclude_none=True)
+    metadata = form_data.metadata
 
     idx = 0
     is_agents_model = False
@@ -1684,8 +1762,6 @@ async def responses(
 
     # Enforce per-model access control
     await check_model_access(user, await Models.get_model_by_id(model_id), BYPASS_MODEL_ACCESS_CONTROL)
-
-    body = json.dumps(payload)
 
     if model_id:
         models = request.app.state.OPENAI_MODELS
@@ -1723,7 +1799,10 @@ async def responses(
     streaming = False
 
     try:
-        headers, cookies = await get_headers_and_cookies(request, url, key, api_config, user=user)
+        headers, cookies = await get_headers_and_cookies(request, url, key, api_config, metadata, user=user)
+
+        # OpenClaw: inject provider-specific session key header
+        _inject_openclaw_headers(headers, api_config, metadata, user)
 
         if api_config.get('azure') or api_config.get('provider') == 'azure':
             auth_type = api_config.get('auth_type', 'bearer')
@@ -1741,6 +1820,10 @@ async def responses(
                 request_url = f'{url}/openai/deployments/{model}/responses?api-version={api_version}'
         else:
             request_url = f'{url}/responses'
+
+        # OpenClaw: inject provider-specific body fields before serialization
+        _inject_openclaw_body(payload, api_config, user)
+        body = json.dumps(payload)
 
         session = await get_session()
         r = await session.request(
