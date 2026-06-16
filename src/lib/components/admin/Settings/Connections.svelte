@@ -6,7 +6,7 @@
 
 	import { getOllamaConfig, updateOllamaConfig } from '$lib/apis/ollama';
 	import { getOpenAIConfig, updateOpenAIConfig, getOpenAIModels } from '$lib/apis/openai';
-	import { getAgentsAPIConfig, updateAgentsAPIConfig } from '$lib/apis/agents';
+	import { getAgentsAPIConfig, updateAgentsAPIConfig, getAgentsModels } from '$lib/apis/agents';
 	import { getModels as _getModels, getBackendConfig } from '$lib/apis';
 	import { getConnectionsConfig, setConnectionsConfig } from '$lib/apis/configs';
 
@@ -249,6 +249,26 @@
 						OLLAMA_API_CONFIGS[idx] = OLLAMA_API_CONFIGS[url] || {};
 					}
 				}
+			}
+
+			if (ENABLE_AGENTS_API) {
+				for (const [idx, url] of AGENTS_API_BASE_URLS.entries()) {
+					if (!AGENTS_API_CONFIGS[idx]) {
+						AGENTS_API_CONFIGS[idx] = AGENTS_API_CONFIGS[url] || {};
+					}
+				}
+
+				AGENTS_API_BASE_URLS.forEach(async (url, idx) => {
+					AGENTS_API_CONFIGS[idx] = AGENTS_API_CONFIGS[idx] || {};
+					if (!(AGENTS_API_CONFIGS[idx]?.enable ?? true)) {
+						return;
+					}
+					try {
+						await getAgentsModels(localStorage.token, idx);
+					} catch {
+						// Connection verification failure is non-fatal
+					}
+				});
 			}
 		}
 	});
