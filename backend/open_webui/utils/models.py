@@ -51,6 +51,14 @@ async def fetch_openai_models(request: Request, user: UserModel = None):
     return openai_response['data']
 
 
+async def fetch_agents_models(request: Request, user: UserModel = None):
+    """Fetch models from all Agents API connections (OpenClaw, Hermes, etc.)."""
+    if not getattr(request.app.state.config, 'ENABLE_AGENTS_API', False):
+        return []
+    agents_response = await openai.get_all_agents_models(request, user=user)
+    return agents_response['data']
+
+
 async def get_all_base_models(request: Request, user: UserModel = None):
     openai_task = (
         fetch_openai_models(request, user)
@@ -62,11 +70,18 @@ async def get_all_base_models(request: Request, user: UserModel = None):
         if request.app.state.config.ENABLE_OLLAMA_API
         else asyncio.sleep(0, result=[])
     )
+    agents_task = (
+        fetch_agents_models(request, user)
+        if getattr(request.app.state.config, 'ENABLE_AGENTS_API', False)
+        else asyncio.sleep(0, result=[])
+    )
     function_task = get_function_models(request)
 
-    openai_models, ollama_models, function_models = await asyncio.gather(openai_task, ollama_task, function_task)
+    openai_models, ollama_models, function_models, agents_models = await asyncio.gather(
+        openai_task, ollama_task, function_task, agents_task
+    )
 
-    return function_models + openai_models + ollama_models
+    return function_models + openai_models + ollama_models + agents_models
 
 
 async def get_all_models(request, refresh: bool = False, user: UserModel = None):

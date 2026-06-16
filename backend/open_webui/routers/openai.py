@@ -416,30 +416,32 @@ async def speech(request: Request, user=Depends(get_verified_user)):
         raise HTTPException(status_code=401, detail=ERROR_MESSAGES.OPENAI_NOT_FOUND)
 
 
-async def get_all_models_responses(request: Request, user: UserModel) -> list:
-    if not request.app.state.config.ENABLE_OPENAI_API:
-        return []
+async def _get_models_from_connections(
+    api_base_urls: list[str],
+    api_keys: list[str],
+    api_configs: dict,
+    request: Request,
+    user: UserModel,
+    owned_by: str = 'openai',
+) -> list:
+    """
+    Fetch models from a set of OpenAI-compatible API connections.
 
+    Shared helper used by both OpenAI API and Agents API connection pools.
+    Returns a list of raw responses (one per URL index).
+    """
     # Cache config values locally to avoid repeated Redis lookups.
-    # Each access to request.app.state.config.<KEY> triggers a Redis GET;
-    # caching here avoids hundreds of redundant round-trips.
-    api_base_urls = request.app.state.config.OPENAI_API_BASE_URLS
-    api_keys = list(request.app.state.config.OPENAI_API_KEYS)
-    api_configs = request.app.state.config.OPENAI_API_CONFIGS
+    api_keys = list(api_keys)
 
-    # Check if API KEYS length is same than API URLS length
+    # Check if API KEYS length matches API URLS length
     num_urls = len(api_base_urls)
     num_keys = len(api_keys)
 
     if num_keys != num_urls:
-        # if there are more keys than urls, remove the extra keys
         if num_keys > num_urls:
             api_keys = api_keys[:num_urls]
-            request.app.state.config.OPENAI_API_KEYS = api_keys
-        # if there are more urls than keys, add empty keys
         else:
             api_keys += [''] * (num_urls - num_keys)
-            request.app.state.config.OPENAI_API_KEYS = api_keys
 
     request_tasks = []
     for idx, url in enumerate(api_base_urls):
@@ -464,7 +466,7 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
                             {
                                 'id': model_id,
                                 'name': model_id,
-                                'owned_by': 'openai',
+                                'owned_by': owned_by,
                                 'openai': {'id': model_id},
                                 'urlIdx': idx,
                             }
@@ -490,6 +492,7 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
             prefix_id = api_config.get('prefix_id', None)
             tags = api_config.get('tags', [])
             provider = api_config.get('provider', '')
+            agents_provider = api_config.get('agents_provider', None)
 
             model_list = response if isinstance(response, list) else response.get('data', [])
             if not isinstance(model_list, list):
@@ -513,8 +516,58 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
                 if provider:
                     model['provider'] = provider
 
-    log.debug(f'get_all_models:responses() {responses}')
+                if agents_provider:
+                    model['agents_provider'] = agents_provider
+
+    log.debug(f'_get_models_from_connections() responses: {responses}')
     return responses
+
+
+async def get_all_models_responses(request: Request, user: UserModel) -> list:
+    if not request.app.state.config.ENABLE_OPENAI_API:
+        return []
+
+    api_base_urls = request.app.state.config.OPENAI_API_BASE_URLS
+    api_keys = list(request.app.state.config.OPENAI_API_KEYS)
+    api_configs = request.app.state.config.OPENAI_API_CONFIGS
+
+    # Align keys with URLs (mutate state for backward compatibility)
+    num_urls = len(api_base_urls)
+    num_keys = len(api_keys)
+    if num_keys != num_urls:
+        if num_keys > num_urls:
+            api_keys = api_keys[:num_urls]
+        else:
+            api_keys += [''] * (num_urls - num_keys)
+        request.app.state.config.OPENAI_API_KEYS = api_keys
+
+    return await _get_models_from_connections(
+        api_base_urls, api_keys, api_configs, request, user, owned_by='openai'
+    )
+
+
+async def get_all_agents_models_responses(request: Request, user: UserModel) -> list:
+    """Fetch models from all Agents API connections."""
+    if not getattr(request.app.state.config, 'ENABLE_AGENTS_API', False):
+        return []
+
+    api_base_urls = request.app.state.config.AGENTS_API_BASE_URLS
+    api_keys = list(request.app.state.config.AGENTS_API_KEYS)
+    api_configs = request.app.state.config.AGENTS_API_CONFIGS
+
+    # Align keys with URLs
+    num_urls = len(api_base_urls)
+    num_keys = len(api_keys)
+    if num_keys != num_urls:
+        if num_keys > num_urls:
+            api_keys = api_keys[:num_urls]
+        else:
+            api_keys += [''] * (num_urls - num_keys)
+        request.app.state.config.AGENTS_API_KEYS = api_keys
+
+    return await _get_models_from_connections(
+        api_base_urls, api_keys, api_configs, request, user, owned_by='agents'
+    )
 
 
 async def get_filtered_models(models, user, db=None):
@@ -620,6 +673,65 @@ async def get_all_models(request: Request, user: UserModel) -> dict[str, list]:
     log.debug(f'models: {models}')
 
     request.app.state.OPENAI_MODELS = models
+    return {'data': list(models.values())}
+
+
+@cached(
+    ttl=MODELS_CACHE_TTL,
+    key=lambda _, user: f'agents_all_models_{user.id}' if user else 'agents_all_models',
+)
+async def get_all_agents_models(request: Request, user: UserModel) -> dict[str, list]:
+    """
+    Fetch and merge models from all Agents API connections.
+
+    Mirrors get_all_models() but operates on AGENTS_API_* config arrays
+    and stores results in request.app.state.AGENTS_MODELS.
+    """
+    log.info('get_all_agents_models()')
+
+    if not getattr(request.app.state.config, 'ENABLE_AGENTS_API', False):
+        return {'data': []}
+
+    api_base_urls = request.app.state.config.AGENTS_API_BASE_URLS
+
+    responses = await get_all_agents_models_responses(request, user=user)
+
+    def extract_data(response):
+        if response and 'data' in response:
+            return response['data']
+        if isinstance(response, list):
+            return response
+        return None
+
+    def get_merged_models(model_lists):
+        log.debug(f'merge_agents_models_lists {model_lists}')
+        models = {}
+
+        for idx, model_list in enumerate(model_lists):
+            if model_list is not None and 'error' not in model_list:
+                for model in model_list:
+                    model_id = model.get('id') or model.get('name')
+
+                    if model_id and model_id not in models:
+                        agents_provider = model.get('agents_provider', '')
+                        merged = {
+                            **model,
+                            'name': model.get('name', model_id),
+                            'owned_by': agents_provider or 'agents',
+                            'openai': model,
+                            'connection_type': model.get('connection_type', 'external'),
+                            'provider': model.get('provider', ''),
+                            'urlIdx': idx,
+                            'source': 'agents',
+                        }
+                        models[model_id] = merged
+
+        return models
+
+    models = get_merged_models(map(extract_data, responses))
+    log.debug(f'agents models: {models}')
+
+    request.app.state.AGENTS_MODELS = models
     return {'data': list(models.values())}
 
 
