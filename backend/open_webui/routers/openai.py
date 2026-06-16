@@ -747,6 +747,10 @@ async def get_models(request: Request, url_idx: int | None = None, user=Depends(
 
     if url_idx is None:
         models = await get_all_models(request, user=user)
+        # Merge agents models into the unified list
+        if getattr(request.app.state.config, 'ENABLE_AGENTS_API', False):
+            agents_models = await get_all_agents_models(request, user=user)
+            models['data'] = models.get('data', []) + agents_models.get('data', [])
     else:
         url = request.app.state.config.OPENAI_API_BASE_URLS[url_idx]
         key = request.app.state.config.OPENAI_API_KEYS[url_idx]
@@ -821,6 +825,60 @@ async def get_models(request: Request, url_idx: int | None = None, user=Depends(
 
     if user.role == 'user' and not BYPASS_MODEL_ACCESS_CONTROL:
         models['data'] = await get_filtered_models(models, user)
+
+    return models
+
+
+@router.get('/agents/models')
+@router.get('/agents/models/{url_idx}')
+async def get_agents_models(
+    request: Request, url_idx: int | None = None, user=Depends(get_verified_user)
+):
+    """Fetch models from Agents API connections (OpenClaw, Hermes, etc.)."""
+    if not getattr(request.app.state.config, 'ENABLE_AGENTS_API', False):
+        raise HTTPException(status_code=503, detail='Agents API is disabled')
+
+    if url_idx is None:
+        return await get_all_agents_models(request, user=user)
+
+    # Fetch from a specific agents connection index
+    url = request.app.state.config.AGENTS_API_BASE_URLS[url_idx]
+    key = request.app.state.config.AGENTS_API_KEYS[url_idx]
+    api_config = request.app.state.config.AGENTS_API_CONFIGS.get(
+        str(url_idx),
+        request.app.state.config.AGENTS_API_CONFIGS.get(url, {}),  # Legacy support
+    )
+
+    r = None
+    models = {'data': [], 'object': 'list'}
+    async with aiohttp.ClientSession(
+        trust_env=True,
+        timeout=aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST),
+    ) as session:
+        try:
+            headers, cookies = await get_headers_and_cookies(request, url, key, api_config, user=user)
+            async with session.get(
+                f'{url}/models',
+                headers=headers,
+                cookies=cookies,
+                ssl=AIOHTTP_CLIENT_SESSION_SSL,
+            ) as r:
+                if r.status != 200:
+                    error_detail = f'HTTP Error: {r.status}'
+                    try:
+                        res = await r.json()
+                        if 'error' in res:
+                            error_detail = f'External Error: {res["error"]}'
+                    except Exception:
+                        pass
+                    raise Exception(error_detail)
+                models = await r.json()
+        except aiohttp.ClientError as e:
+            log.exception(f'Client error: {str(e)}')
+            raise HTTPException(status_code=500, detail='Open WebUI: Server Connection Error')
+        except Exception as e:
+            log.exception(f'Unexpected error: {e}')
+            raise HTTPException(status_code=500, detail=str(e))
 
     return models
 
@@ -1275,21 +1333,40 @@ async def generate_chat_completion(
         models = request.app.state.OPENAI_MODELS
     model = models.get(model_id)
 
+    is_agents_model = False
     if model:
         idx = model['urlIdx']
     else:
-        raise HTTPException(
-            status_code=404,
-            detail=ERROR_MESSAGES.MODEL_NOT_FOUND(),
-        )
+        # Try Agents API connections
+        agents_models = getattr(request.app.state, 'AGENTS_MODELS', {})
+        if not agents_models or model_id not in agents_models:
+            await get_all_agents_models(request, user=user)
+            agents_models = request.app.state.AGENTS_MODELS
+        model = agents_models.get(model_id)
+        if model:
+            idx = model['urlIdx']
+            is_agents_model = True
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=ERROR_MESSAGES.MODEL_NOT_FOUND(),
+            )
 
     # Get the API config for the model
-    api_config = request.app.state.config.OPENAI_API_CONFIGS.get(
-        str(idx),
-        request.app.state.config.OPENAI_API_CONFIGS.get(
-            request.app.state.config.OPENAI_API_BASE_URLS[idx], {}
-        ),  # Legacy support
-    )
+    if is_agents_model:
+        api_config = request.app.state.config.AGENTS_API_CONFIGS.get(
+            str(idx),
+            request.app.state.config.AGENTS_API_CONFIGS.get(
+                request.app.state.config.AGENTS_API_BASE_URLS[idx], {}
+            ),  # Legacy support
+        )
+    else:
+        api_config = request.app.state.config.OPENAI_API_CONFIGS.get(
+            str(idx),
+            request.app.state.config.OPENAI_API_CONFIGS.get(
+                request.app.state.config.OPENAI_API_BASE_URLS[idx], {}
+            ),  # Legacy support
+        )
 
     prefix_id = api_config.get('prefix_id', None)
     if prefix_id:
@@ -1304,8 +1381,12 @@ async def generate_chat_completion(
             'role': user.role,
         }
 
-    url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
-    key = request.app.state.config.OPENAI_API_KEYS[idx]
+    if is_agents_model:
+        url = request.app.state.config.AGENTS_API_BASE_URLS[idx]
+        key = request.app.state.config.AGENTS_API_KEYS[idx]
+    else:
+        url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
+        key = request.app.state.config.OPENAI_API_KEYS[idx]
 
     # Check if model is a reasoning model that needs special handling
     if is_openai_new_model(payload['model']):
@@ -1460,6 +1541,7 @@ async def embeddings(request: Request, form_data: dict, user):
         dict: OpenAI-compatible embeddings response.
     """
     idx = 0
+    is_agents_model = False
     # Prepare payload/body
     body = json.dumps(form_data)
     # Find correct backend url/key based on model
@@ -1471,13 +1553,30 @@ async def embeddings(request: Request, form_data: dict, user):
         models = request.app.state.OPENAI_MODELS
     if model_id in models:
         idx = models[model_id]['urlIdx']
+    else:
+        # Try Agents API connections
+        agents_models = getattr(request.app.state, 'AGENTS_MODELS', {})
+        if not agents_models or model_id not in agents_models:
+            await get_all_agents_models(request, user=user)
+            agents_models = request.app.state.AGENTS_MODELS
+        if model_id in agents_models:
+            idx = agents_models[model_id]['urlIdx']
+            is_agents_model = True
 
-    url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
-    key = request.app.state.config.OPENAI_API_KEYS[idx]
-    api_config = request.app.state.config.OPENAI_API_CONFIGS.get(
-        str(idx),
-        request.app.state.config.OPENAI_API_CONFIGS.get(url, {}),  # Legacy support
-    )
+    if is_agents_model:
+        url = request.app.state.config.AGENTS_API_BASE_URLS[idx]
+        key = request.app.state.config.AGENTS_API_KEYS[idx]
+        api_config = request.app.state.config.AGENTS_API_CONFIGS.get(
+            str(idx),
+            request.app.state.config.AGENTS_API_CONFIGS.get(url, {}),  # Legacy support
+        )
+    else:
+        url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
+        key = request.app.state.config.OPENAI_API_KEYS[idx]
+        api_config = request.app.state.config.OPENAI_API_CONFIGS.get(
+            str(idx),
+            request.app.state.config.OPENAI_API_CONFIGS.get(url, {}),  # Legacy support
+        )
 
     r = None
     streaming = False
@@ -1580,6 +1679,7 @@ async def responses(
     payload = form_data.model_dump(exclude_none=True)
 
     idx = 0
+    is_agents_model = False
     model_id = form_data.model
 
     # Enforce per-model access control
@@ -1594,13 +1694,30 @@ async def responses(
             models = request.app.state.OPENAI_MODELS
         if model_id in models:
             idx = models[model_id]['urlIdx']
+        else:
+            # Try Agents API connections
+            agents_models = getattr(request.app.state, 'AGENTS_MODELS', {})
+            if not agents_models or model_id not in agents_models:
+                await get_all_agents_models(request, user=user)
+                agents_models = request.app.state.AGENTS_MODELS
+            if model_id in agents_models:
+                idx = agents_models[model_id]['urlIdx']
+                is_agents_model = True
 
-    url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
-    key = request.app.state.config.OPENAI_API_KEYS[idx]
-    api_config = request.app.state.config.OPENAI_API_CONFIGS.get(
-        str(idx),
-        request.app.state.config.OPENAI_API_CONFIGS.get(url, {}),  # Legacy support
-    )
+    if is_agents_model:
+        url = request.app.state.config.AGENTS_API_BASE_URLS[idx]
+        key = request.app.state.config.AGENTS_API_KEYS[idx]
+        api_config = request.app.state.config.AGENTS_API_CONFIGS.get(
+            str(idx),
+            request.app.state.config.AGENTS_API_CONFIGS.get(url, {}),  # Legacy support
+        )
+    else:
+        url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
+        key = request.app.state.config.OPENAI_API_KEYS[idx]
+        api_config = request.app.state.config.OPENAI_API_CONFIGS.get(
+            str(idx),
+            request.app.state.config.OPENAI_API_CONFIGS.get(url, {}),  # Legacy support
+        )
 
     r = None
     streaming = False
@@ -1695,6 +1812,7 @@ async def proxy(path: str, request: Request, user=Depends(get_verified_user)):
             payload = None
 
     idx = 0
+    is_agents_model = False
     model_id = payload.get('model') if isinstance(payload, dict) else None
     if model_id:
         models = request.app.state.OPENAI_MODELS
@@ -1703,15 +1821,34 @@ async def proxy(path: str, request: Request, user=Depends(get_verified_user)):
             models = request.app.state.OPENAI_MODELS
         if model_id in models:
             idx = models[model_id]['urlIdx']
+        else:
+            # Try Agents API connections
+            agents_models = getattr(request.app.state, 'AGENTS_MODELS', {})
+            if not agents_models or model_id not in agents_models:
+                await get_all_agents_models(request, user=user)
+                agents_models = request.app.state.AGENTS_MODELS
+            if model_id in agents_models:
+                idx = agents_models[model_id]['urlIdx']
+                is_agents_model = True
 
-    url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
-    key = request.app.state.config.OPENAI_API_KEYS[idx]
-    api_config = request.app.state.config.OPENAI_API_CONFIGS.get(
-        str(idx),
-        request.app.state.config.OPENAI_API_CONFIGS.get(
-            request.app.state.config.OPENAI_API_BASE_URLS[idx], {}
-        ),  # Legacy support
-    )
+    if is_agents_model:
+        url = request.app.state.config.AGENTS_API_BASE_URLS[idx]
+        key = request.app.state.config.AGENTS_API_KEYS[idx]
+        api_config = request.app.state.config.AGENTS_API_CONFIGS.get(
+            str(idx),
+            request.app.state.config.AGENTS_API_CONFIGS.get(
+                request.app.state.config.AGENTS_API_BASE_URLS[idx], {}
+            ),  # Legacy support
+        )
+    else:
+        url = request.app.state.config.OPENAI_API_BASE_URLS[idx]
+        key = request.app.state.config.OPENAI_API_KEYS[idx]
+        api_config = request.app.state.config.OPENAI_API_CONFIGS.get(
+            str(idx),
+            request.app.state.config.OPENAI_API_CONFIGS.get(
+                request.app.state.config.OPENAI_API_BASE_URLS[idx], {}
+            ),  # Legacy support
+        )
 
     r = None
     streaming = False

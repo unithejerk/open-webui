@@ -303,6 +303,10 @@ from open_webui.config import (
     ONEDRIVE_CLIENT_ID_PERSONAL,
     ONEDRIVE_SHAREPOINT_TENANT_ID,
     ONEDRIVE_SHAREPOINT_URL,
+    AGENTS_API_BASE_URLS,
+    AGENTS_API_CONFIGS,
+    AGENTS_API_KEYS,
+    ENABLE_AGENTS_API,
     OPENAI_API_BASE_URLS,
     OPENAI_API_CONFIGS,
     OPENAI_API_KEYS,
@@ -814,6 +818,19 @@ app.state.config.OPENAI_API_KEYS = OPENAI_API_KEYS
 app.state.config.OPENAI_API_CONFIGS = OPENAI_API_CONFIGS
 
 app.state.OPENAI_MODELS = {}
+
+########################################
+#
+# AGENTS API
+#
+########################################
+
+app.state.config.ENABLE_AGENTS_API = ENABLE_AGENTS_API
+app.state.config.AGENTS_API_BASE_URLS = AGENTS_API_BASE_URLS
+app.state.config.AGENTS_API_KEYS = AGENTS_API_KEYS
+app.state.config.AGENTS_API_CONFIGS = AGENTS_API_CONFIGS
+
+app.state.AGENTS_MODELS = {}
 
 ########################################
 #
@@ -1629,6 +1646,14 @@ async def unload_model(request: Request, form_data: ModelUnloadForm, user=Depend
                 status_code=400,
                 detail=f'Provider "{provider or "default"}" does not support model unloading',
             )
+
+    # --- Agents API providers ---
+    agents_models = getattr(request.app.state, 'AGENTS_MODELS', None) or {}
+    if model_id in agents_models:
+        raise HTTPException(
+            status_code=400,
+            detail='Agents API connections do not support model unloading',
+        )
 
     raise HTTPException(status_code=404, detail=f'Model "{model_id}" not found')
 
