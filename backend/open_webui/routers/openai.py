@@ -287,6 +287,63 @@ async def update_config(request: Request, form_data: OpenAIConfigForm, user=Depe
     }
 
 
+##########################################
+#
+# Agents API config routes
+#
+##########################################
+
+
+@router.get('/agents/config')
+async def get_agents_config(request: Request, user=Depends(get_admin_user)):
+    return {
+        'ENABLE_AGENTS_API': request.app.state.config.ENABLE_AGENTS_API,
+        'AGENTS_API_BASE_URLS': request.app.state.config.AGENTS_API_BASE_URLS,
+        'AGENTS_API_KEYS': request.app.state.config.AGENTS_API_KEYS,
+        'AGENTS_API_CONFIGS': request.app.state.config.AGENTS_API_CONFIGS,
+    }
+
+
+class AgentsAPIConfigForm(BaseModel):
+    ENABLE_AGENTS_API: bool | None = None
+    AGENTS_API_BASE_URLS: list[str]
+    AGENTS_API_KEYS: list[str]
+    AGENTS_API_CONFIGS: dict
+
+
+@router.post('/agents/config/update')
+async def update_agents_config(request: Request, form_data: AgentsAPIConfigForm, user=Depends(get_admin_user)):
+    request.app.state.config.ENABLE_AGENTS_API = form_data.ENABLE_AGENTS_API
+    request.app.state.config.AGENTS_API_BASE_URLS = form_data.AGENTS_API_BASE_URLS
+    request.app.state.config.AGENTS_API_KEYS = form_data.AGENTS_API_KEYS
+
+    # Check if API KEYS length matches API URLS length
+    if len(request.app.state.config.AGENTS_API_KEYS) != len(request.app.state.config.AGENTS_API_BASE_URLS):
+        if len(request.app.state.config.AGENTS_API_KEYS) > len(request.app.state.config.AGENTS_API_BASE_URLS):
+            request.app.state.config.AGENTS_API_KEYS = request.app.state.config.AGENTS_API_KEYS[
+                : len(request.app.state.config.AGENTS_API_BASE_URLS)
+            ]
+        else:
+            request.app.state.config.AGENTS_API_KEYS += [''] * (
+                len(request.app.state.config.AGENTS_API_BASE_URLS) - len(request.app.state.config.AGENTS_API_KEYS)
+            )
+
+    request.app.state.config.AGENTS_API_CONFIGS = form_data.AGENTS_API_CONFIGS
+
+    # Remove API configs that are not in the API URLS
+    keys = list(map(str, range(len(request.app.state.config.AGENTS_API_BASE_URLS))))
+    request.app.state.config.AGENTS_API_CONFIGS = {
+        key: value for key, value in request.app.state.config.AGENTS_API_CONFIGS.items() if key in keys
+    }
+
+    return {
+        'ENABLE_AGENTS_API': request.app.state.config.ENABLE_AGENTS_API,
+        'AGENTS_API_BASE_URLS': request.app.state.config.AGENTS_API_BASE_URLS,
+        'AGENTS_API_KEYS': request.app.state.config.AGENTS_API_KEYS,
+        'AGENTS_API_CONFIGS': request.app.state.config.AGENTS_API_CONFIGS,
+    }
+
+
 @router.post('/audio/speech')
 async def speech(request: Request, user=Depends(get_verified_user)):
     idx = None

@@ -418,6 +418,41 @@ OPENAI_API_BASE_URL = 'https://api.openai.com/v1'
 
 
 ####################################
+# AGENTS_API
+####################################
+
+ENABLE_AGENTS_API = ConfigVar(
+    'ENABLE_AGENTS_API',
+    'agents.enable',
+    os.getenv('ENABLE_AGENTS_API', 'True').lower() == 'true',
+)
+
+AGENTS_API_KEYS = os.getenv('AGENTS_API_KEYS', '')
+AGENTS_API_KEYS = [url.strip() for url in AGENTS_API_KEYS.split(';')] if AGENTS_API_KEYS else ['']
+
+AGENTS_API_KEYS = ConfigVar(
+    'AGENTS_API_KEYS',
+    'agents.api_keys',
+    AGENTS_API_KEYS,
+)
+
+AGENTS_API_BASE_URLS = os.getenv('AGENTS_API_BASE_URLS', '')
+AGENTS_API_BASE_URLS = [url.strip() for url in AGENTS_API_BASE_URLS.split(';')] if AGENTS_API_BASE_URLS else ['']
+
+AGENTS_API_BASE_URLS = ConfigVar(
+    'AGENTS_API_BASE_URLS',
+    'agents.api_base_urls',
+    AGENTS_API_BASE_URLS,
+)
+
+AGENTS_API_CONFIGS = ConfigVar(
+    'AGENTS_API_CONFIGS',
+    'agents.api_configs',
+    {},
+)
+
+
+####################################
 # MODELS
 ####################################
 
