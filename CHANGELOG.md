@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- 🤖 **Agents API connections.** A new connection type for stateful agent backends (OpenClaw, etc.). Models discovered from agent backends are listed alongside OpenAI models and route through the Responses API for native tool calling. Supports per-connection configuration (provider, auth type, api type, tags, prefix ID, and model filtering). [#PR](https://github.com/unithejerk/open-webui/pull/1)
+- 🔑 **OpenClaw session-key management.** Requests to OpenClaw agent backends carry a stable `x-openclaw-session-key` header derived from the user and chat, so conversations persist across turns without re-sending the full message history. Background tasks for title, tags, follow-ups, and autocomplete are assigned their own compound session keys per chat and task type to keep agent sessions clean. [#PR](https://github.com/unithejerk/open-webui/pull/1)
+- ✂️ **Message trimming for OpenClaw connections.** Only the system prompt and messages since the most recent user turn are forwarded to OpenClaw backends; the session key carries the rest of the conversation. Cuts token usage and latency on every turn. [#PR](https://github.com/unithejerk/open-webui/pull/1)
+- 🖼️ **OpenClaw input-image format adaptation.** Images are rewritten from the OpenAI flat `image_url` format to the OpenClaw `source`-wrapper format automatically, including base64 data-URL conversion. [#PR](https://github.com/unithejerk/open-webui/pull/1)
+- 📡 **SSE event-line capture.** Providers that place the event type on the standard `event:` line (rather than inside the `data:` JSON payload) are now handled correctly by the streaming response parser, fixing compatibility with OpenClaw and other SSE-compliant backends. [#PR](https://github.com/unithejerk/open-webui/pull/1)
+
 ## [0.9.6] - 2026-06-01
 
 ### Added
