@@ -1468,19 +1468,12 @@ async def generate_chat_completion(
     # turn.  OpenClaw stores the full conversation server-side via the
     # x-openclaw-session-key header, so re-sending the entire history on
     # every request wastes tokens and defeats the purpose of the session.
+    # Must run *after* convert_to_responses_payload so the input key exists.
     if is_agents_model:
         if is_responses:
-            before = len(payload.get('input', []))
             trim_openclaw_responses_input(payload, api_config)
-            after = len(payload.get('input', []))
-            if before != after:
-                log.debug('OpenClaw trim (responses): %d → %d items', before, after)
         else:
-            before = len(payload.get('messages', []))
             trim_openclaw_chat_messages(payload, api_config)
-            after = len(payload.get('messages', []))
-            if before != after:
-                log.debug('OpenClaw trim: %d → %d messages', before, after)
 
     inject_openclaw_body(payload, api_config, user)
     adapt_openclaw_input_images(payload, api_config)
