@@ -136,6 +136,9 @@ def trim_openclaw_chat_messages(payload: dict, api_config: dict) -> None:
 
     Keeps only system messages + messages from the most recent user role
     message onward (so tool-call chains stay intact).
+
+    When no user message is present (e.g. tool-call continuations),
+    everything is kept as-is.
     """
     if not is_openclaw_provider(api_config):
         return
@@ -149,8 +152,10 @@ def trim_openclaw_chat_messages(payload: dict, api_config: dict) -> None:
         if messages[i].get('role') == 'user':
             tail_start = i
             break
+    if tail_start == len(messages):
+        return  # no user message — keep everything (tool continuation)
 
-    tail = messages[tail_start:]  # empty when no user message found (safe)
+    tail = messages[tail_start:]
     payload['messages'] = system_msgs + tail
 
 
@@ -160,6 +165,9 @@ def trim_openclaw_responses_input(payload: dict, api_config: dict) -> None:
 
     Keeps only system instruction items + items from the most recent user
     role message onward.
+
+    When no user message is present (e.g. tool-call continuations),
+    everything is kept as-is.
     """
     if not is_openclaw_provider(api_config):
         return
@@ -177,6 +185,8 @@ def trim_openclaw_responses_input(payload: dict, api_config: dict) -> None:
         if item.get('type') == 'message' and item.get('role') == 'user':
             tail_start = i
             break
+    if tail_start == len(input_items):
+        return  # no user message — keep everything (tool continuation)
 
-    tail = input_items[tail_start:]  # empty when no user message (safe)
+    tail = input_items[tail_start:]
     payload['input'] = system_items + tail
